@@ -270,7 +270,7 @@ if wandb_log and master_process:
 
 # training loop
 if 'xpu' in device:
-    model, optimizer = ipex.optimize(model, optimizer=optimizer)
+    model, optimizer = ipex.optimize(model, optimizer=optimizer, dtype=torch.bfloat16)
 
 X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
