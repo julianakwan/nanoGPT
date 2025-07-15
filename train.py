@@ -119,19 +119,15 @@ if 'cuda' in device:
     torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
     device_type = 'cuda'
     dtype = 'bfloat16' #if torch.cuda.is_available() and torch.cuda.is_bf16_supported()  # could also be 'float32', 'bfloat16', or 'float16'
-    ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype] 
-    ctx = torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 elif 'xpu' in device:
     device_type = 'xpu'
     dtype = 'bfloat16'
-    ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
-    ctx = torch.xpu.amp.autocast(enabled=True, dtype=ptdtype)
 else:
     device_type = 'cpu' # for later use in torch.autocast
     dtype = 'float16' # note: float16 data type will automatically use a GradScaler
-    ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype] 
-    ctx = nullcontext() 
 
+ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
+ctx = torch.amp.autocast(device_type=device_type, dtype=ptdtype) if 'cuda' or 'xpu' in device else nullcontext() 
     
 
 

@@ -5,6 +5,7 @@ import os
 import pickle
 from contextlib import nullcontext
 import torch
+import intel_extension_for_pytorch as ipex
 import tiktoken
 from model import GPTConfig, GPT
 
@@ -17,20 +18,32 @@ max_new_tokens = 500 # number of tokens generated in each sample
 temperature = 0.8 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
 top_k = 200 # retain only the top_k most likely tokens, clamp others to have 0 probability
 seed = 1337
-device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
-dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
+device = 'xpu' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
+dtype = 'bfloat16' #if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
 compile = False # use PyTorch 2.0 to compile the model to be faster
 exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------
 
 torch.manual_seed(seed)
-torch.cuda.manual_seed(seed)
-torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
-torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
-device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
-ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
-ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
+if 'cuda' in device:
+    torch.cuda.manual_seed(seed)    
+    torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
+    torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
+    device_type = 'cuda'
+    dtype = 'bfloat16' #if torch.cuda.is_available() and torch.cuda.is_bf16_supported()  # could also be 'float32', 'bfloat16', or 'float16'
+    
+elif 'xpu' in device:
+    device_type = 'xpu'
+    dtype = 'bfloat16'
+
+else:
+    device_type = 'cpu' # for later use in torch.autocast
+    dtype = 'float16' # note: float16 data type will automatically use a GradScaler
+
+
+ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
+ctx = torch.amp.autocast(device_type=device_type, dtype=ptdtype) if 'cuda' or 'xpu' in device else nullcontext() 
 # model
 if init_from == 'resume':
     # init from a model saved in a specific directory
