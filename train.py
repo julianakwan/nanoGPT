@@ -228,7 +228,10 @@ if compile:
     print("compiling the model... (takes a ~minute)")
     unoptimized_model = model
     model = torch.compile(model) # requires PyTorch 2.0
-
+    
+if 'xpu' in device:
+    model, optimizer = ipex.optimize(model, optimizer=optimizer, dtype=torch.bfloat16)
+    
 # wrap model into DDP container
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
@@ -269,9 +272,6 @@ if wandb_log and master_process:
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
 # training loop
-if 'xpu' in device:
-    model, optimizer = ipex.optimize(model, optimizer=optimizer, dtype=torch.bfloat16)
-
 X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
