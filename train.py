@@ -20,12 +20,14 @@ import os
 import time
 import math
 import pickle
+import re
 from contextlib import nullcontext
 
 import numpy as np
 import torch
 import intel_extension_for_pytorch as ipex
 from torch.nn.parallel import DistributedDataParallel as DDP
+import oneccl_bindings_for_pytorch as torch_ccl
 from torch.distributed import init_process_group, destroy_process_group
 
 
@@ -82,19 +84,49 @@ config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
 
 # various inits, derived attributes, I/O setup
-ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
+
+# is this a ddp run?
+if (device=='xpu'):
+    ddp = int(os.environ.get('PMI_RANK', -1)) != -1 
+else:
+    ddp = int(os.environ.get('RANK', -1)) != -1
+    
 if ddp:
-    ddp_rank = int(os.environ['RANK'])
-    ddp_local_rank = int(os.environ['LOCAL_RANK'])
-    ddp_world_size = int(os.environ['WORLD_SIZE'])
-    init_process_group(backend=backend)
+    nodelist_env = os.getenv("SLURM_JOB_NODELIST")
+    if "[" in nodelist_env:
+        numbers = re.compile(r"\d+")
+        prefix = nodelist_env[0 : nodelist_env.index("[")]
+        nodelist = tuple(prefix + x for x in numbers.findall(nodelist_env))
+    else:
+        nodelist=(nodelist_env,)
+    master_addr = nodelist[0]
+#    master_addr = "127.0.0.1"
+    os.environ["MASTER_ADDR"] = master_addr
+    os.environ["MASTER_PORT"] = "12345"
+
         
     if (device == 'cuda'):
+        ddp_rank = int(os.environ['RANK'])
+        ddp_local_rank = int(os.environ['LOCAL_RANK'])
+        ddp_world_size = int(os.environ['WORLD_SIZE'])
+        
         device = f'cuda:{ddp_local_rank}'
         torch.cuda.set_device(device)
     if (device == 'xpu'):
-        device = torch.device("xpu:{}".format(ddp_local_rank))
+        ddp_rank = int(os.environ['PMI_RANK'])
+        ddp_world_size = int(os.environ['PMI_SIZE'])
+        os.environ['RANK'] = str(ddp_rank)
+        os.environ['WORLD_SIZE'] = str(ddp_world_size)
+                    
+#        ddp_local_rank = int(os.environ['MPI_LOCALRANKID']) #TODO
+        ntasks_per_node = int(os.environ['SLURM_NTASKS_PER_NODE'])
+        ddp_local_rank = ddp_rank - ntasks_per_node * (ddp_rank // ntasks_per_node)
+        device = f'xpu:{ddp_local_rank}'
+        print(device)        
+#        device = torch.device("xpu:"+str(ddp_local_rank))
         torch.xpu.set_device(device)
+        
+    init_process_group(backend=backend)        
     master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
     seed_offset = ddp_rank # each process gets a different seed
     # world_size number of processes will be training simultaneously, so we can scale
@@ -126,6 +158,7 @@ else:
     device_type = 'cpu' # for later use in torch.autocast
     dtype = 'float16' # note: float16 data type will automatically use a GradScaler
 
+    
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = torch.amp.autocast(device_type=device_type, dtype=ptdtype) if 'cuda' or 'xpu' in device else nullcontext() 
     
@@ -213,7 +246,7 @@ if block_size < model.config.block_size:
 model.to(device)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
-scaler = torch.amp.GradScaler(enabled=(dtype == 'float16'))
+scaler = torch.amp.GradScaler(enabled=(dtype == 'float16'), device=device)
 
 # optimizer
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
@@ -228,7 +261,7 @@ if compile:
     print("compiling the model... (takes a ~minute)")
     unoptimized_model = model
     model = torch.compile(model) # requires PyTorch 2.0
-    
+
 if 'xpu' in device:
     model, optimizer = ipex.optimize(model, optimizer=optimizer, dtype=torch.bfloat16)
     
