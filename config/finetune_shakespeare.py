@@ -8,7 +8,7 @@ wandb_project = 'shakespeare'
 wandb_run_name = 'ft-' + str(time.time())
 
 dataset = 'shakespeare'
-init_from = 'gpt2-xl' # this is the largest GPT-2 model
+init_from = 'gpt2-own' # this is the largest GPT-2 model
 
 # only save checkpoints if the validation loss improves
 always_save_checkpoint = False
@@ -23,3 +23,5 @@ max_iters = 20
 # finetune at constant LR
 learning_rate = 3e-5
 decay_lr = False
+
+dropout=0.1

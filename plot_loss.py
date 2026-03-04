@@ -48,7 +48,7 @@ if __name__ == '__main__':
     for i in range(nfiles):
         print("Plotting {:}...".format(args.input_filename[i]))
         iter_no, loss = read_output(args.input_filename[i])
-        plt.plot(iter_no, loss)
+        plt.plot(iter_no, loss, color='b')
         
     plt.xlabel('iteration')
     plt.ylabel('loss')

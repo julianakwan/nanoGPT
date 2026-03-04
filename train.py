@@ -25,11 +25,11 @@ from contextlib import nullcontext
 
 import numpy as np
 import torch
-import intel_extension_for_pytorch as ipex
+#import intel_extension_for_pytorch as ipex
 from torch.nn.parallel import DistributedDataParallel as DDP
-import oneccl_bindings_for_pytorch as torch_ccl
+#import oneccl_bindings_for_pytorch as torch_ccl
 from torch.distributed import init_process_group, destroy_process_group
-
+from socket import gethostname
 
 
 from model import GPTConfig, GPT
@@ -37,7 +37,8 @@ from model import GPTConfig, GPT
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
-out_dir = 'out'
+
+out_dir = 'out-ainstein-v1'
 eval_interval = 2000
 log_interval = 1
 eval_iters = 200
@@ -49,7 +50,7 @@ wandb_log = False # disabled by default
 wandb_project = 'owt'
 wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # data
-dataset = 'openwebtext'
+dataset = 'v1'
 gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 1024
@@ -72,7 +73,7 @@ warmup_iters = 2000 # how many steps to warm up for
 lr_decay_iters = 600000 # should be ~= max_iters per Chinchilla
 min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 # DDP settings
-backend = 'ccl' # 'nccl', 'gloo', 'ccl', etc.
+backend = 'xccl' # 'nccl', 'gloo', 'ccl', etc.
 # system
 device = 'xpu' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 
@@ -121,10 +122,11 @@ if ddp:
 #        ddp_local_rank = int(os.environ['MPI_LOCALRANKID']) #TODO
         ntasks_per_node = int(os.environ['SLURM_NTASKS_PER_NODE'])
         ddp_local_rank = ddp_rank - ntasks_per_node * (ddp_rank // ntasks_per_node)
-        device = f'xpu:{ddp_local_rank}'
-        print(device)        
+        device = f"xpu:{ddp_local_rank}"
 #        device = torch.device("xpu:"+str(ddp_local_rank))
         torch.xpu.set_device(device)
+        print(f"host+device: {gethostname()}+{ddp_local_rank}, "
+              f"rank: {ddp_rank}, local_rank: {ddp_local_rank}, ", flush=True)
         
     init_process_group(backend=backend)        
     master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
@@ -150,7 +152,7 @@ if 'cuda' in device:
     torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
     torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
     device_type = 'cuda'
-    dtype = 'bfloat16' #if torch.cuda.is_available() and torch.cuda.is_bf16_supported()  # could also be 'float32', 'bfloat16', or 'float16'
+    dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16'  # could also be 'float32', 'bfloat16', or 'float16'
 elif 'xpu' in device:
     device_type = 'xpu'
     dtype = 'bfloat16'
@@ -165,7 +167,7 @@ ctx = torch.amp.autocast(device_type=device_type, dtype=ptdtype) if 'cuda' or 'x
 
 
 # poor man's data loader
-data_dir = os.path.join('data', dataset)
+data_dir = os.path.join('/rds/project/rds-RDXlCvDoKfc/', dataset)
 def get_batch(split):
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
@@ -212,7 +214,7 @@ elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
     # resume training from a checkpoint.
     ckpt_path = os.path.join(out_dir, 'ckpt.pt')
-    checkpoint = torch.load(ckpt_path, map_location=device)
+    checkpoint = torch.load(ckpt_path, map_location=torch.device(device))
     checkpoint_model_args = checkpoint['model_args']
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
@@ -234,7 +236,8 @@ elif init_from == 'resume':
 elif init_from.startswith('gpt2'):
     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
     # initialize from OpenAI GPT-2 weights
-    override_args = dict(dropout=dropout)
+    in_dir = 'out-gpt2'
+    override_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, dropout=dropout, in_dir=in_dir)
     model = GPT.from_pretrained(init_from, override_args)
     # read off the created config params, so we can store them into checkpoint correctly
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
@@ -262,8 +265,8 @@ if compile:
     unoptimized_model = model
     model = torch.compile(model) # requires PyTorch 2.0
 
-if 'xpu' in device:
-    model, optimizer = ipex.optimize(model, optimizer=optimizer, dtype=torch.bfloat16)
+#if 'xpu' in device:
+#    model, optimizer = ipex.optimize(model, optimizer=optimizer, dtype=torch.bfloat16)
     
 # wrap model into DDP container
 if ddp:
@@ -275,7 +278,7 @@ def estimate_loss():
     out = {}
     model.eval()
     for split in ['train', 'val']:
-        losses = torch.zeros(eval_iters)
+        losses = torch.zeros(eval_iters, device=device)
         for k in range(eval_iters):
             X, Y = get_batch(split)
             with ctx:
@@ -382,7 +385,7 @@ while True:
         if local_iter_num >= 5: # let the training loop settle a bit
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%", flush=True)
     iter_num += 1
     local_iter_num += 1
 

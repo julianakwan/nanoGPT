@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH -A ZETTASCALE-PORTING-DAWN-GPU
+#SBATCH -A AIRR-P9-DAWN-GPU
 #SBATCH --partition=pvc9 # Dawn PVC partition
 #SBATCH --nodes=1
 #SBATCH --ntasks=8
@@ -9,11 +9,25 @@
 #SBATCH --qos=INTR
 
 
+# Use this to resubmit as a dependent job
+# sbatch --dependency=afterany:<job id> nanogpt.sh
+
+module purge
+module restore dawn-2025.1.0
+
+export ZE_FLAT_DEVICE_HIERARCHY="FLAT"
+export ZE_AFFINITY_MASK="0,1,2,3,4,5,6,7"
+export I_MPI_JOB_RESPECT_PROCESS_PLACEMENT=0
+unset CCL_CONFIGURATION_PATH_modshare
+export CCL_ZE_IPC_EXCHANGE=pidfd
+
+
 cd /rds/user/jk945/hpc-work/nanoGPT/
-source setup-env.sh
-conda activate nanogpt
+source .nanogpt/bin/activate
 
-mpirun -n 8 -ppn 8 -prepend-rank hostname
+export HF_HOME=/rds/user/$USER/hpc-work/nanoGPT/data
+export TRITON_CACHE_DIR=/home/jk945/rds/hpc-work/nanoGPT/.triton
+#mpirun -n ${SLURM_NTASKS} -ppn ${SLURM_NTASKS_PER_NODE} -prepend-rank hostname
 
-mpirun -n 8 -ppn 8 python train.py config/train_gpt2.py --compile=False --wandb_log=False
+mpirun -n ${SLURM_NTASKS} -ppn ${SLURM_NTASKS_PER_NODE} python train.py config/finetune_shakespeare.py --wandb_log=False 
 
