@@ -1,12 +1,12 @@
 #!/bin/bash -l
 #SBATCH -A AIRR-P9-DAWN-GPU
 #SBATCH --partition=pvc9 # Dawn PVC partition
-#SBATCH --nodes=1
-#SBATCH --ntasks=8
+#SBATCH --nodes=5
+#SBATCH --ntasks=40
 #SBATCH --ntasks-per-node=8   # Number of tasks (usually number of MPI ranks)
 #SBATCH --gres=gpu:4 # Number of requested GPUs per node
-#SBATCH --time=00:30:00
-#SBATCH --qos=INTR
+#SBATCH --time=12:00:00
+
 
 
 # Use this to resubmit as a dependent job
@@ -29,5 +29,5 @@ export HF_HOME=/rds/user/$USER/hpc-work/nanoGPT/data
 export TRITON_CACHE_DIR=/home/jk945/rds/hpc-work/nanoGPT/.triton
 #mpirun -n ${SLURM_NTASKS} -ppn ${SLURM_NTASKS_PER_NODE} -prepend-rank hostname
 
-mpirun -n ${SLURM_NTASKS} -ppn ${SLURM_NTASKS_PER_NODE} python train.py config/finetune_shakespeare.py --wandb_log=False 
+mpirun -n ${SLURM_NTASKS} -ppn ${SLURM_NTASKS_PER_NODE} python train.py config/train_gpt2.py --wandb_log=False 
 
